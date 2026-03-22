@@ -26,7 +26,10 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
-  }
+  },
+  connectionTimeout: 10000, // 10 seconds timeout for connecting
+  greetingTimeout: 10000,   // 10 seconds timeout for greeting
+  socketTimeout: 15000      // 15 seconds max overall socket timeout
 });
 
 exports.me = async (req, res) => {
@@ -124,7 +127,16 @@ exports.register = async (req, res) => {
       } catch (emailError) {
         console.error('Email error:', emailError);
         await User.findByIdAndDelete(user._id);
-        return res.status(500).json({ error: "Failed to send verification email. Please try again." });
+        
+        // Return detailed error if email times out
+        let errorMessage = "Failed to send verification email. Please try again.";
+        if (emailError.code === 'ETIMEDOUT' || emailError.message.includes('timeout')) {
+          errorMessage = "Email server connection timed out. Live server SMTP port 465/587 might be blocked.";
+        } else if (emailError.responseCode === 535) {
+          errorMessage = "Invalid email credentials. Please check EMAIL_USER and EMAIL_PASS.";
+        }
+        
+        return res.status(500).json({ error: errorMessage, details: emailError.message });
       }
     } else {
       // Development mode - auto-verified
@@ -383,7 +395,7 @@ exports.verifyEmail = async (req, res) => {
       
       const statusColor = user.isAdmin ? '#2563eb' : '#059669';
       const buttonText = user.isAdmin ? 'Check Status' : 'Go to Login';
-      const buttonUrl = user.isAdmin ? 'http://localhost:3001/admin/login' : '${process.env.CLIENT_URL}/login';
+      const buttonUrl = user.isAdmin ? `${process.env.ADMIN_URL || 'http://localhost:3001'}/admin/login` : `${process.env.CLIENT_URL}/login`;
 
       return res.send(`
         <html>
@@ -505,7 +517,12 @@ exports.adminRegister = async (req, res) => {
     } catch (emailError) {
       console.error('Email error:', emailError);
       await User.findByIdAndDelete(user._id);
-      return res.status(500).json({ error: "Failed to send verification email. Please try again." });
+      
+      let errorMessage = "Failed to send verification email. Please try again.";
+      if (emailError.code === 'ETIMEDOUT' || emailError.message.includes('timeout')) {
+        errorMessage = "Email server connection timed out. Live server SMTP port 465/587 might be blocked.";
+      }
+      return res.status(500).json({ error: errorMessage, details: emailError.message });
     }
   } catch (error) {
     console.error('Admin registration error:', error);
