@@ -8,7 +8,7 @@ const multer = require('multer');
 let cloudinary;
 try {
   cloudinary = require('cloudinary').v2;
-  
+
   if (process.env.CLOUDINARY_CLOUD_NAME) {
     cloudinary.config({
       cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -20,17 +20,41 @@ try {
   console.warn('Cloudinary not configured, file upload will be disabled');
 }
 
-// Configure nodemailer
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  connectionTimeout: 10000, // 10 seconds timeout for connecting
-  greetingTimeout: 10000,   // 10 seconds timeout for greeting
-  socketTimeout: 15000      // 15 seconds max overall socket timeout
-});
+const axios = require('axios');
+
+// Configure Email API Sender over HTTP using SendGrid
+const sendEmailViaSendGrid = async (options) => {
+  const { to, subject, html } = options;
+  try {
+    const apiKey = process.env.SENDGRID_API_KEY;
+    if (!apiKey) {
+      console.warn("SENDGRID_API_KEY missing. Email will not be sent.");
+      return;
+    }
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'shlokagrawal94@gmail.com';
+    const response = await axios.post('https://api.sendgrid.com/v3/mail/send', {
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: fromEmail, name: "Digdarshan" },
+      subject: subject,
+      content: [{ type: "text/html", value: html }]
+    }, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    return response.data;
+  } catch (err) {
+    // SendGrid nests error messages in err.response.data.errors array
+    const errorDetails = err.response?.data?.errors?.[0]?.message || err.message;
+    console.error('Email API Error:', errorDetails);
+    
+    // Directly forward the restriction reason to the client UI
+    const newErr = new Error(errorDetails);
+    newErr.isSendGridError = true;
+    throw newErr;
+  }
+};
 
 exports.me = async (req, res) => {
   try {
@@ -38,7 +62,7 @@ exports.me = async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
-    
+
     // Get user response with image URL
     const userResponse = user.toJSON();
     res.json(userResponse);
@@ -50,6 +74,8 @@ exports.me = async (req, res) => {
 
 exports.register = async (req, res) => {
   try {
+    // Normalize email to lowercase
+    if (req.body.email) req.body.email = req.body.email.toLowerCase();
     const { name, email, password } = req.body;
 
     // Validate inputs
@@ -76,26 +102,26 @@ exports.register = async (req, res) => {
     // In development, auto-verify users. In production, require email verification
     const isDevelopment = process.env.NODE_ENV !== 'production';
 
-    user = await User.create({ 
-      name, 
-      email, 
+    user = await User.create({
+      name,
+      email,
       password: hashedPassword,
       verificationToken: isDevelopment ? undefined : crypto.randomBytes(32).toString('hex'),
-      verificationExpires: isDevelopment ? undefined : Date.now() + 24*60*60*1000,
+      verificationExpires: isDevelopment ? undefined : Date.now() + 24 * 60 * 60 * 1000,
       isVerified: isDevelopment ? true : false  // Auto-verify in dev
     });
 
     // Generate token immediately after registration
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { 
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d" // Longer expiration
     });
 
     // Send verification email with backend URL (only in production)
     if (!isDevelopment) {
       const verificationUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${verificationToken}`;
-      
+
       try {
-        await transporter.sendMail({
+        await sendEmailViaSendGrid({
           to: email,
           subject: 'Welcome to Webvarta - Verify your email',
           html: `
@@ -114,7 +140,7 @@ exports.register = async (req, res) => {
           `
         });
 
-        res.status(201).json({ 
+        res.status(201).json({
           message: "Registration successful! Please check your email to verify your account.",
           requiresVerification: true,
           token,
@@ -127,20 +153,18 @@ exports.register = async (req, res) => {
       } catch (emailError) {
         console.error('Email error:', emailError);
         await User.findByIdAndDelete(user._id);
-        
-        // Return detailed error if email times out
+
+        // Return detailed error if email fails (especially Resend domain verification errors)
         let errorMessage = "Failed to send verification email. Please try again.";
-        if (emailError.code === 'ETIMEDOUT' || emailError.message.includes('timeout')) {
-          errorMessage = "Email server connection timed out. Live server SMTP port 465/587 might be blocked.";
-        } else if (emailError.responseCode === 535) {
-          errorMessage = "Invalid email credentials. Please check EMAIL_USER and EMAIL_PASS.";
+        if (emailError.isSendGridError) {
+          errorMessage = `Email API Error: ${emailError.message}`;
         }
-        
+
         return res.status(500).json({ error: errorMessage, details: emailError.message });
       }
     } else {
       // Development mode - auto-verified
-      res.status(201).json({ 
+      res.status(201).json({
         message: "Registration successful! You can now login.",
         requiresVerification: false,
         token,
@@ -155,9 +179,11 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
+    // Normalize email to lowercase
+    if (req.body.email) req.body.email = req.body.email.toLowerCase();
     const { email, password } = req.body;
     let user = await User.findOne({ email });
-    
+
     if (!user) {
       return res.status(400).json({ error: "No account found with this email. Please register first." });
     }
@@ -166,16 +192,16 @@ exports.login = async (req, res) => {
     if (!user.isVerified) {
       // If verification token exists and hasn't expired, tell user to check email
       if (user.verificationToken && user.verificationExpires > Date.now()) {
-        return res.status(403).json({ 
+        return res.status(403).json({
           error: "Please verify your email first. Check your inbox for the verification link.",
-          requiresVerification: true 
+          requiresVerification: true
         });
-      } 
+      }
       // If token expired, allow requesting new verification
       else {
-        return res.status(403).json({ 
+        return res.status(403).json({
           error: "Email verification expired. Please request a new verification email.",
-          requiresNewVerification: true 
+          requiresNewVerification: true
         });
       }
     }
@@ -188,13 +214,13 @@ exports.login = async (req, res) => {
 
     // For admin logins, check approval status
     if (user.isAdmin && !user.adminApproved) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: "Your admin access request is pending approval. You'll receive an email when approved.",
-        isPendingApproval: true 
+        isPendingApproval: true
       });
     }
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { 
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d"
     });
 
@@ -204,8 +230,8 @@ exports.login = async (req, res) => {
     delete userResponse.verificationToken;
     delete userResponse.verificationExpires;
 
-    res.json({ 
-      message: "Login successful", 
+    res.json({
+      message: "Login successful",
       token,
       user: userResponse
     });
@@ -222,7 +248,7 @@ exports.completeProfile = async (req, res) => {
     }
 
     const { phone, dob, address } = req.body;
-    
+
     if (!phone || !dob || !address) {
       return res.status(400).json({ error: "All fields are required" });
     }
@@ -237,7 +263,7 @@ exports.completeProfile = async (req, res) => {
 
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
-      { 
+      {
         $set: {
           phone,
           dob: new Date(dob),
@@ -272,7 +298,7 @@ exports.completeProfile = async (req, res) => {
 exports.verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
-    
+
     // Find user with valid verification token
     const user = await User.findOne({
       verificationToken: token,
@@ -303,12 +329,12 @@ exports.verifyEmail = async (req, res) => {
       user.isVerified = true;
       user.verificationToken = undefined;
       user.verificationExpires = undefined;
-      
+
       // If this is an admin verification, generate approval token
       if (user.isAdmin) {
         const approvalToken = crypto.randomBytes(32).toString('hex');
         user.approvalToken = approvalToken;
-        user.approvalTokenExpires = Date.now() + 7*24*60*60*1000; // 7 days expiry
+        user.approvalTokenExpires = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days expiry
       }
 
       // Save the changes first
@@ -323,14 +349,14 @@ exports.verifyEmail = async (req, res) => {
         }
 
         // Send notification email to owner about pending approval
-        await transporter.sendMail({
+        await sendEmailViaSendGrid({
           to: ownerEmail,
-          subject: 'New Admin Approval Request - WebVarta',
+          subject: 'New Admin Approval Request - Digdarshan',
           html: `
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
               <h1 style="color: #1a365d;">New Admin Approval Request</h1>
               <p>Hello,</p>
-              <p>A new admin approval request has been received for WebVarta:</p>
+              <p>A new admin approval request has been received for Digdarshan:</p>
               <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p style="margin: 5px 0;"><strong>Name:</strong> ${user.name}</p>
                 <p style="margin: 5px 0;"><strong>Email:</strong> ${user.email}</p>
@@ -347,9 +373,9 @@ exports.verifyEmail = async (req, res) => {
         });
 
         // Send confirmation email to admin
-        await transporter.sendMail({
+        await sendEmailViaSendGrid({
           to: user.email,
-          subject: 'WebVarta Admin Request - Email Verified',
+          subject: 'Digdarshan Admin Request - Email Verified',
           html: `
             <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
               <h1 style="color: #1a365d;">Email Verification Successful</h1>
@@ -357,7 +383,7 @@ exports.verifyEmail = async (req, res) => {
               <p>Your email has been successfully verified! 🎉</p>
               <p style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <strong>Next Steps:</strong><br>
-                Your admin access request is now pending approval from the WebVarta owner. You will receive another email once your request is reviewed.
+                Your admin access request is now pending approval from the Digdarshan owner. You will receive another email once your request is reviewed.
               </p>
               <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p style="margin: 0;"><strong>Status:</strong> Awaiting Owner Approval</p>
@@ -369,9 +395,9 @@ exports.verifyEmail = async (req, res) => {
         });
       } else {
         // For regular users, send verification success email
-        await transporter.sendMail({
+        await sendEmailViaSendGrid({
           to: user.email,
-          subject: 'WebVarta - Email Verified',
+          subject: 'Digdarshan - Email Verified',
           html: `
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
               <h1 style="color: #1a365d;">Email Verified Successfully!</h1>
@@ -389,13 +415,13 @@ exports.verifyEmail = async (req, res) => {
       }
 
       // Return appropriate verification success page
-      const approvalStatus = !user.isAdmin 
+      const approvalStatus = !user.isAdmin
         ? 'You can now log in to your account.'
         : 'Your request has been sent to the owner for approval. You will receive an email once it\'s reviewed.';
-      
+
       const statusColor = user.isAdmin ? '#2563eb' : '#059669';
       const buttonText = user.isAdmin ? 'Check Status' : 'Go to Login';
-      const buttonUrl = user.isAdmin ? `${process.env.ADMIN_URL || 'http://localhost:3001'}/admin/login` : `${process.env.CLIENT_URL}/login`;
+      const buttonUrl = user.isAdmin ? `${process.env.ADMIN_URL || 'https://digdarshanadmin.vercel.app'}/admin/login` : `${process.env.CLIENT_URL}/login`;
 
       return res.send(`
         <html>
@@ -418,19 +444,19 @@ exports.verifyEmail = async (req, res) => {
     } catch (innerError) {
       // If there's an error during the email sending or saving process
       console.error('Verification process error:', innerError);
-      
+
       // Try to revert the changes if possible
       if (user.isModified()) {
         user.isVerified = false;
         user.verificationToken = token;
-        user.verificationExpires = Date.now() + 24*60*60*1000;
+        user.verificationExpires = Date.now() + 24 * 60 * 60 * 1000;
         try {
           await user.save();
         } catch (revertError) {
           console.error('Failed to revert user changes:', revertError);
         }
       }
-      
+
       throw innerError; // Re-throw to be caught by outer catch block
     }
   } catch (error) {
@@ -458,6 +484,8 @@ exports.verifyEmail = async (req, res) => {
 // Handle admin registration requests
 exports.adminRegister = async (req, res) => {
   try {
+    // Normalize email to lowercase
+    if (req.body.email) req.body.email = req.body.email.toLowerCase();
     const { name, email, password, adminReason } = req.body;
 
     if (!name || !email || !password || !adminReason) {
@@ -473,12 +501,12 @@ exports.adminRegister = async (req, res) => {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    user = await User.create({ 
-      name, 
-      email, 
+    user = await User.create({
+      name,
+      email,
       password: hashedPassword,
       verificationToken,
-      verificationExpires: Date.now() + 24*60*60*1000,
+      verificationExpires: Date.now() + 24 * 60 * 60 * 1000,
       isVerified: false,
       role: 'admin',
       isAdmin: true,
@@ -488,16 +516,16 @@ exports.adminRegister = async (req, res) => {
 
     // Send verification email
     const verificationUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${verificationToken}`;
-    
+
     try {
-      await transporter.sendMail({
+      await sendEmailViaSendGrid({
         to: email,
-        subject: 'WebVarta Admin Registration - Verify your email',
+        subject: 'Digdarshan Admin Registration - Verify your email',
         html: `
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h1 style="color: #1a365d;">WebVarta Admin Registration</h1>
+            <h1 style="color: #1a365d;">Digdarshan Admin Registration</h1>
             <p>Hi ${name},</p>
-            <p>Thank you for registering as an admin with WebVarta. Please verify your email:</p>
+            <p>Thank you for registering as an admin with Digdarshan. Please verify your email:</p>
             <div style="text-align: center; margin: 30px 0;">
               <a href="${verificationUrl}" 
                  style="background-color: #3182ce; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
@@ -510,17 +538,17 @@ exports.adminRegister = async (req, res) => {
         `
       });
 
-      res.status(201).json({ 
+      res.status(201).json({
         message: "Admin registration submitted! Please verify your email. Your request will be reviewed by the owner.",
         requiresVerification: true
       });
     } catch (emailError) {
       console.error('Email error:', emailError);
       await User.findByIdAndDelete(user._id);
-      
+
       let errorMessage = "Failed to send verification email. Please try again.";
-      if (emailError.code === 'ETIMEDOUT' || emailError.message.includes('timeout')) {
-        errorMessage = "Email server connection timed out. Live server SMTP port 465/587 might be blocked.";
+      if (emailError.isSendGridError) {
+        errorMessage = `Email API Error: ${emailError.message}`;
       }
       return res.status(500).json({ error: errorMessage, details: emailError.message });
     }
@@ -556,16 +584,16 @@ exports.approveAdmin = async (req, res) => {
     await user.save();
 
     // Send approval email
-    await transporter.sendMail({
+    await sendEmailViaSendGrid({
       to: user.email,
-      subject: 'WebVarta Admin Access Approved',
+      subject: 'Digdarshan Admin Access Approved',
       html: `
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
           <h1 style="color: #1a365d;">Admin Access Approved</h1>
           <p>Hi ${user.name},</p>
-          <p>Your admin access request for WebVarta has been approved. You can now log in to the admin dashboard.</p>
+          <p>Your admin access request for Digdarshan has been approved. You can now log in to the admin dashboard.</p>
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${process.env.CLIENT_URL}/admin/login" 
+            <a href="${process.env.ADMIN_URL}/admin/login" 
                style="background-color: #3182ce; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
               Go to Admin Login
             </a>
@@ -600,8 +628,8 @@ exports.listAdmins = async (req, res) => {
       isAdmin: true,
       adminApproved: true
     })
-    .populate('approvedBy', 'name email')
-    .select('-password');
+      .populate('approvedBy', 'name email')
+      .select('-password');
 
     // Get revoked admins (was admin, now revoked)
     const revokedAdmins = await User.find({
@@ -649,14 +677,14 @@ exports.revokeAdmin = async (req, res) => {
     await user.save();
 
     // Send revocation email
-    await transporter.sendMail({
+    await sendEmailViaSendGrid({
       to: user.email,
-      subject: 'WebVarta Admin Access Revoked',
+      subject: 'Digdarshan Admin Access Revoked',
       html: `
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
           <h1 style="color: #1a365d;">Admin Access Revoked</h1>
           <p>Hi ${user.name},</p>
-          <p>Your admin access to WebVarta has been revoked. If you think this is a mistake, please contact the administrator.</p>
+          <p>Your admin access to Digdarshan has been revoked. If you think this is a mistake, please contact the administrator.</p>
         </div>
       `
     });
@@ -693,14 +721,14 @@ exports.reapproveAdmin = async (req, res) => {
       await user.save();
 
       // Send re-approval email
-      await transporter.sendMail({
+      await sendEmailViaSendGrid({
         to: user.email,
-        subject: 'WebVarta Admin Access Restored',
+        subject: 'Digdarshan Admin Access Restored',
         html: `
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <h1 style="color: #059669;">Admin Access Restored</h1>
             <p>Hi ${user.name},</p>
-            <p>Your admin access to WebVarta has been restored. You can now log in to the admin dashboard again.</p>
+            <p>Your admin access to Digdarshan has been restored. You can now log in to the admin dashboard again.</p>
           </div>
         `
       });
@@ -733,9 +761,11 @@ exports.verifyAdmin = async (req, res) => {
 // Admin-specific login endpoint
 exports.adminLogin = async (req, res) => {
   try {
+    // Normalize email to lowercase
+    if (req.body.email) req.body.email = req.body.email.toLowerCase();
     const { email, password } = req.body;
     let user = await User.findOne({ email });
-    
+
     if (!user) {
       return res.status(400).json({ error: "Invalid credentials" });
     }
@@ -763,12 +793,12 @@ exports.adminLogin = async (req, res) => {
 
     // Generate token with admin flag
     const token = jwt.sign(
-      { 
-        id: user._id, 
+      {
+        id: user._id,
         isAdmin: true,
         adminApproved: true
-      }, 
-      process.env.JWT_SECRET, 
+      },
+      process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
@@ -778,8 +808,8 @@ exports.adminLogin = async (req, res) => {
     delete userResponse.verificationToken;
     delete userResponse.verificationExpires;
 
-    res.json({ 
-      message: "Admin login successful", 
+    res.json({
+      message: "Admin login successful",
       token,
       user: userResponse
     });
@@ -818,16 +848,16 @@ exports.approveAdminByEmail = async (req, res) => {
     await user.save();
 
     // Send approval email to admin
-    await transporter.sendMail({
+    await sendEmailViaSendGrid({
       to: user.email,
-      subject: 'WebVarta Admin Access Approved',
+      subject: 'Digdarshan Admin Access Approved',
       html: `
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
           <h1 style="color: #1a365d;">Admin Access Approved!</h1>
           <p>Hi ${user.name},</p>
-          <p>Your admin access request for WebVarta has been approved. You can now log in to the admin dashboard.</p>
+          <p>Your admin access request for Digdarshan has been approved. You can now log in to the admin dashboard.</p>
           <div style="text-align: center; margin: 30px 0;">
-            <a href="http://localhost:3001/admin/login" 
+            <a href="${process.env.ADMIN_URL}/admin/login" 
                style="background-color: #059669; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
               Go to Admin Dashboard
             </a>
@@ -892,14 +922,14 @@ exports.denyAdminByEmail = async (req, res) => {
     await user.save();
 
     // Send denial email
-    await transporter.sendMail({
+    await sendEmailViaSendGrid({
       to: user.email,
-      subject: 'WebVarta Admin Access Request - Not Approved',
+      subject: 'Digdarshan Admin Access Request - Not Approved',
       html: `
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
           <h1 style="color: #1a365d;">Admin Access Request Update</h1>
           <p>Hi ${user.name},</p>
-          <p>We regret to inform you that your admin access request for WebVarta has not been approved at this time.</p>
+          <p>We regret to inform you that your admin access request for Digdarshan has not been approved at this time.</p>
           <p>If you believe this is a mistake or would like to submit another request in the future, please contact support.</p>
         </div>
       `
