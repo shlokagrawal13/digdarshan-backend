@@ -493,11 +493,105 @@ exports.adminRegister = async (req, res) => {
     }
 
     let user = await User.findOne({ email });
+    
+    // If the user already exists (e.g. they registered on the frontend first)
     if (user) {
-      return res.status(400).json({ error: "Email already registered" });
+      if (user.isAdmin && user.adminApproved) {
+        return res.status(400).json({ error: "This email is already an approved admin. Please login." });
+      }
+
+      // To prevent unauthorized admin requests on behalf of an existing user, verify their existing password
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ error: "This email is already registered as a normal user. Please enter your correct existing password to upgrade to admin." });
+      }
+
+      // Upgrade existing account to admin candidate
+      user.role = 'admin';
+      user.isAdmin = true;
+      user.adminReason = adminReason;
+      user.adminApproved = false;
+
+      if (!user.isVerified) {
+        // Exists but unverified: Resend the verification email
+        user.verificationToken = crypto.randomBytes(32).toString('hex');
+        user.verificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+        await user.save();
+
+        const verificationUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${user.verificationToken}`;
+        await sendEmailViaSendGrid({
+          to: email,
+          subject: 'Digdarshan Admin Registration - Verify your email',
+          html: `
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+              <h1 style="color: #1a365d;">Digdarshan Admin Registration</h1>
+              <p>Hi ${name},</p>
+              <p>Thank you for requesting to upgrade your account to admin with Digdarshan. Please verify your email:</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${verificationUrl}" 
+                   style="background-color: #3182ce; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
+                  Verify Email Address
+                </a>
+              </div>
+            </div>
+          `
+        });
+        return res.status(200).json({ 
+          message: "Admin upgrade requested. Please check your email to verify your account first.",
+          requiresVerification: true 
+        });
+      } else {
+        // They are already verified on frontend! Skip verification and directly send to owner
+        const approvalToken = crypto.randomBytes(32).toString('hex');
+        user.approvalToken = approvalToken;
+        user.approvalTokenExpires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+        await user.save();
+
+        const ownerEmail = process.env.OWNER_EMAIL;
+        
+        // Notify owner
+        await sendEmailViaSendGrid({
+          to: ownerEmail,
+          subject: 'New Admin Approval Request - Digdarshan',
+          html: `
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+              <h1 style="color: #1a365d;">Account Upgrade Request</h1>
+              <p>An existing user has requested admin privileges:</p>
+              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p style="margin: 5px 0;"><strong>Name:</strong> ${user.name}</p>
+                <p style="margin: 5px 0;"><strong>Email:</strong> ${user.email}</p>
+                <p style="margin: 5px 0;"><strong>Reason:</strong> ${user.adminReason}</p>
+              </div>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${process.env.BACKEND_URL}/api/auth/admin/approve-by-email/${user.approvalToken}" style="background-color: #059669; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin-right: 10px; display:inline-block;">Approve Access</a>
+                <a href="${process.env.BACKEND_URL}/api/auth/admin/deny-by-email/${user.approvalToken}" style="background-color: #dc2626; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display:inline-block;">Deny Access</a>
+              </div>
+            </div>
+          `
+        });
+
+        // Notify user
+        await sendEmailViaSendGrid({
+          to: user.email,
+          subject: 'Digdarshan Admin Request Received',
+          html: `
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+              <h1 style="color: #1a365d;">Admin Request Submitted</h1>
+              <p>Dear ${user.name},</p>
+              <p>Since your email is already verified, your request for admin access has been submitted directly to the owner for approval.</p>
+              <p>You will receive an email once a decision is made.</p>
+            </div>
+          `
+        });
+
+        return res.status(200).json({ 
+          message: "Since your email was already verified, your Admin request has been sent directly to the owner for approval!",
+          requiresVerification: false 
+        });
+      }
     }
 
-    // Generate verification token
+    // --- Normal flow for brand new users who don't exist yet ---
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const hashedPassword = await bcrypt.hash(password, 10);
 
