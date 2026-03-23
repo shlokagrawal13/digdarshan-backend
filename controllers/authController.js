@@ -212,13 +212,7 @@ exports.login = async (req, res) => {
       return res.status(400).json({ error: "Invalid password. Please try again." });
     }
 
-    // For admin logins, check approval status
-    if (user.isAdmin && !user.adminApproved) {
-      return res.status(403).json({
-        error: "Your admin access request is pending approval. You'll receive an email when approved.",
-        isPendingApproval: true
-      });
-    }
+    // No admin checks here: standard users should use their accounts even if an admin application is pending.
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d"
