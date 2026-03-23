@@ -84,7 +84,7 @@ exports.register = async (req, res) => {
     try {
       await transporter.sendMail({
         to: email,
-        subject: 'Welcome to Webvarta - Verify your email',
+        subject: 'Welcome to Digdarshan - Verify your email',
         html: `<p>Hi ${name}, verify your email: <a href="${verificationUrl}">Verify Email</a></p>`
       });
 

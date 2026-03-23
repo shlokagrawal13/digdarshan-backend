@@ -48,7 +48,7 @@ const sendEmailViaSendGrid = async (options) => {
     // SendGrid nests error messages in err.response.data.errors array
     const errorDetails = err.response?.data?.errors?.[0]?.message || err.message;
     console.error('Email API Error:', errorDetails);
-    
+
     // Directly forward the restriction reason to the client UI
     const newErr = new Error(errorDetails);
     newErr.isSendGridError = true;
@@ -118,17 +118,17 @@ exports.register = async (req, res) => {
 
     // Send verification email with backend URL (only in production)
     if (!isDevelopment) {
-      const verificationUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${verificationToken}`;
+      const verificationUrl = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
 
       try {
         await sendEmailViaSendGrid({
           to: email,
-          subject: 'Welcome to Webvarta - Verify your email',
+          subject: 'Welcome to Digdarshan - Verify your email',
           html: `
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-              <h1 style="color: #1a365d;">Welcome to Webvarta!</h1>
+              <h1 style="color: #1a365d;">Welcome to Digdarshan!</h1>
               <p>Hi ${name},</p>
-              <p>Thank you for registering with Webvarta. To complete your registration, please verify your email:</p>
+              <p>Thank you for registering with Digdarshan. To complete your registration, please verify your email:</p>
               <div style="text-align: center; margin: 30px 0;">
                 <a href="${verificationUrl}" 
                    style="background-color: #3182ce; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
@@ -300,22 +300,7 @@ exports.verifyEmail = async (req, res) => {
     });
 
     if (!user) {
-      return res.send(`
-        <html>
-          <body style="font-family: Arial, sans-serif; background-color: #f3f4f6; margin: 0; padding: 40px;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 2rem;">
-              <h1 style="color: #dc2626;">Invalid or Expired Link</h1>
-              <p>The verification link is invalid or has expired. Please request a new verification email.</p>
-              <div style="text-align: center; margin-top: 2rem;">
-                <a href="${process.env.CLIENT_URL}/login" 
-                   style="display: inline-block; background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin: 10px;">
-                  Go to Login
-                </a>
-              </div>
-            </div>
-          </body>
-        </html>
-      `);
+      return res.status(400).json({ error: "Invalid or Expired Link" });
     }
 
     try {
@@ -396,7 +381,7 @@ exports.verifyEmail = async (req, res) => {
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
               <h1 style="color: #1a365d;">Email Verified Successfully!</h1>
               <p>Hi ${user.name},</p>
-              <p>Your email has been successfully verified. You can now log in to Webvarta.</p>
+              <p>Your email has been successfully verified. You can now log in to Digdarshan.</p>
               <div style="text-align: center; margin: 30px 0;">
                 <a href="${process.env.CLIENT_URL}/login" 
                    style="background-color: #059669; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
@@ -408,33 +393,16 @@ exports.verifyEmail = async (req, res) => {
         });
       }
 
-      // Return appropriate verification success page
+      // Return appropriate verification success page JSON
       const approvalStatus = !user.isAdmin
         ? 'You can now log in to your account.'
         : 'Your request has been sent to the owner for approval. You will receive an email once it\'s reviewed.';
 
-      const statusColor = user.isAdmin ? '#2563eb' : '#059669';
-      const buttonText = user.isAdmin ? 'Check Status' : 'Go to Login';
-      const buttonUrl = user.isAdmin ? `${process.env.ADMIN_URL || 'https://digdarshanadmin.vercel.app'}/admin/login` : `${process.env.CLIENT_URL}/login`;
-
-      return res.send(`
-        <html>
-          <body style="font-family: Arial, sans-serif; background-color: #f3f4f6; margin: 0; padding: 40px;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 2rem;">
-              <h2 style="color: ${statusColor}; text-align: center;">Email Verified Successfully!</h2>
-              <p style="color: #4b5563; text-align: center; margin-bottom: 20px;">
-                ${approvalStatus}
-              </p>
-              <div style="text-align: center;">
-                <a href="${buttonUrl}" 
-                   style="display: inline-block; background-color: ${statusColor}; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
-                  ${buttonText}
-                </a>
-              </div>
-            </div>
-          </body>
-        </html>
-      `);
+      return res.status(200).json({
+        message: "Email Verified Successfully!",
+        approvalStatus: approvalStatus,
+        isAdmin: user.isAdmin
+      });
     } catch (innerError) {
       // If there's an error during the email sending or saving process
       console.error('Verification process error:', innerError);
@@ -455,23 +423,7 @@ exports.verifyEmail = async (req, res) => {
     }
   } catch (error) {
     console.error('Email verification error:', error);
-    return res.status(500).send(`
-      <html>
-        <body style="font-family: Arial, sans-serif; background-color: #f3f4f6; margin: 0; padding: 40px;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 2rem;">
-            <h1 style="color: #dc2626;">Verification Failed</h1>
-            <p>Sorry, we couldn't verify your email. Please try again or contact support.</p>
-            <p style="color: #6b7280; font-size: 0.9em;">Error: ${error.message || 'An unexpected error occurred'}</p>
-            <div style="text-align: center; margin-top: 2rem;">
-              <a href="${process.env.CLIENT_URL}/support" 
-                 style="display: inline-block; background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin: 10px;">
-                Contact Support
-              </a>
-            </div>
-          </div>
-        </body>
-      </html>
-    `);
+    return res.status(500).json({ error: "Verification Failed. Please try again or contact support." });
   }
 };
 
@@ -487,7 +439,7 @@ exports.adminRegister = async (req, res) => {
     }
 
     let user = await User.findOne({ email });
-    
+
     // If the user already exists (e.g. they registered on the frontend first)
     if (user) {
       if (user.isAdmin && user.adminApproved) {
@@ -512,7 +464,7 @@ exports.adminRegister = async (req, res) => {
         user.verificationExpires = Date.now() + 24 * 60 * 60 * 1000;
         await user.save();
 
-        const verificationUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${user.verificationToken}`;
+        const verificationUrl = `${process.env.CLIENT_URL}/verify-email/${user.verificationToken}`;
         await sendEmailViaSendGrid({
           to: email,
           subject: 'Digdarshan Admin Registration - Verify your email',
@@ -530,9 +482,9 @@ exports.adminRegister = async (req, res) => {
             </div>
           `
         });
-        return res.status(200).json({ 
+        return res.status(200).json({
           message: "Admin upgrade requested. Please check your email to verify your account first.",
-          requiresVerification: true 
+          requiresVerification: true
         });
       } else {
         // They are already verified on frontend! Skip verification and directly send to owner
@@ -542,7 +494,7 @@ exports.adminRegister = async (req, res) => {
         await user.save();
 
         const ownerEmail = process.env.OWNER_EMAIL;
-        
+
         // Notify owner
         await sendEmailViaSendGrid({
           to: ownerEmail,
@@ -578,9 +530,9 @@ exports.adminRegister = async (req, res) => {
           `
         });
 
-        return res.status(200).json({ 
+        return res.status(200).json({
           message: "Since your email was already verified, your Admin request has been sent directly to the owner for approval!",
-          requiresVerification: false 
+          requiresVerification: false
         });
       }
     }
@@ -603,7 +555,7 @@ exports.adminRegister = async (req, res) => {
     });
 
     // Send verification email
-    const verificationUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${verificationToken}`;
+    const verificationUrl = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
 
     try {
       await sendEmailViaSendGrid({
