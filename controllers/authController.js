@@ -106,7 +106,7 @@ exports.register = async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      verificationToken: isDevelopment ? undefined : crypto.randomBytes(32).toString('hex'),
+      verificationToken: isDevelopment ? undefined : verificationToken,
       verificationExpires: isDevelopment ? undefined : Date.now() + 24 * 60 * 60 * 1000,
       isVerified: isDevelopment ? true : false  // Auto-verify in dev
     });
