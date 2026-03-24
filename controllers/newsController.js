@@ -116,7 +116,7 @@ exports.getNewsByCategory = async (req, res) => {
             ...item,
             image: item.image ? {
                 ...item.image,
-                url: item.image.url || `data:${item.image.contentType};base64,${item.image.data.toString('base64')}`
+                url: item.image.url || (item.image.data ? `data:${item.image.contentType};base64,${item.image.data.toString('base64')}` : '')
             } : null
         }));
 

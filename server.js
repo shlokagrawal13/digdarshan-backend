@@ -10,6 +10,7 @@ const authRoutes = require('./routes/auth');
 const newsRoutes = require('./routes/newsRoutes');
 const socialRoutes = require('./routes/social');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const autoPublishRoutes = require('./routes/autoPublish');
 const redis = require('./config/redis');
 const http = require('http');
 const socketIO = require('socket.io');
@@ -83,6 +84,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/news', newsRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/auto-publish', autoPublishRoutes);
 
 app.get("/", (req, res) => {
     res.send("API is running...");
