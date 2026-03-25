@@ -58,18 +58,43 @@ const fetchImageFromUnsplash = async (keyword) => {
     return null;
 };
 
-const processAndUploadImage = async (imageUrl, altKeyword) => {
+const fetchImageFromHuggingFace = async (keyword) => {
+    if (!process.env.HUGGINGFACE_API_KEY) return null;
     try {
-        // Download the image
-        const response = await axios({ 
-            url: imageUrl, 
-            responseType: 'arraybuffer',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        const fullPrompt = keyword + ' highly detailed natural lighting professional photography';
+        const res = await axios.post(
+            'https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0',
+            { inputs: fullPrompt },
+            {
+                headers: { Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}` },
+                responseType: 'arraybuffer'
             }
-        });
-        const inputBuffer = Buffer.from(response.data, 'binary');
+        );
+        return Buffer.from(res.data, 'binary');
+    } catch (e) {
+        console.error('HuggingFace API Error:', e.response ? e.response.statusText : e.message);
+        return null;
+    }
+};
+
+const processAndUploadImage = async (imageInput, altKeyword, isBuffer = false) => {
+    try {
+        let inputBuffer;
+        
+        if (isBuffer) {
+            inputBuffer = imageInput;
+        } else {
+            // Download the image
+            const response = await axios({ 
+                url: imageInput, 
+                responseType: 'arraybuffer',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                }
+            });
+            inputBuffer = Buffer.from(response.data, 'binary');
+        }
 
         // Prepare watermark
         const logoPath = path.join(__dirname, '../assets/logo.png');
@@ -161,8 +186,21 @@ const processAndUploadImage = async (imageUrl, altKeyword) => {
 };
 
 const getNewsImage = async (keywords, fallbackUrl = null) => {
-    // 1. If we have the exact original image from the RSS, JUST RETURN IT directly!
+    // 1. Force AI generation using Hugging Face to totally replace original RSS images with logo!
+    let imageBuffer = await fetchImageFromHuggingFace(keywords[0] || 'breaking news');
+    if (imageBuffer) {
+        const processedUrls = await processAndUploadImage(imageBuffer, keywords[0], true);
+        if (processedUrls) {
+            return {
+                ...processedUrls,
+                credit: 'Hugging Face AI'
+            };
+        }
+    }
+
+    // 2. If Hugging Face fails (API limit/error), fallback to the Exact Original RSS URL
     // Bypassing our download process because Indian News CDNs strictly block servers with 403 Forbidden.
+    // Client browsers will load it fine natively.
     if (fallbackUrl) {
         return {
             newsCard: fallbackUrl,
@@ -172,7 +210,7 @@ const getNewsImage = async (keywords, fallbackUrl = null) => {
         };
     }
 
-    // 2. If NO original image exists, generate a topic-based stock photo.
+    // 2. If NO original image exists, safely fallback to generic stock photos.
     let imageUrlToProcess = null;
     let credit = 'Pexels Default';
     

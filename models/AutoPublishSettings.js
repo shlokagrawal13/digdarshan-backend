@@ -12,7 +12,7 @@ const autoPublishSettingsSchema = new mongoose.Schema({
         instagram: { type: Boolean, default: false },
         twitter: { type: Boolean, default: false }
     },
-    aiModel: { type: String, default: 'gemini-2.5-flash' },
+    aiModel: { type: String, default: 'gemini-flash-latest' },
     lastRun: { type: Date, default: null },
     logs: { type: Array, default: [] }
 }, { timestamps: true });

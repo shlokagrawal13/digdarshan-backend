@@ -127,8 +127,12 @@ const runNewsJob = async () => {
                 }
 
                 try {
+                    // Prevent Google Gemini "429 Too Many Requests" (Max 15 RPM limit)
+                    // We wait 15 seconds per article (~4 articles per min) to comfortably guarantee we never exceed the quota
+                    await new Promise(resolve => setTimeout(resolve, 15000));
+
                     // 1. Generate Content
-                    const generated = await generateHindiContent(item, category, settings.aiModel || 'gemini-2.5-flash');
+                    const generated = await generateHindiContent(item, category, settings.aiModel || 'gemini-flash-latest');
                     
                     // 2. Process Image
                     const imgData = await getNewsImage(generated.keywords, item.originalImage);
@@ -143,7 +147,7 @@ const runNewsJob = async () => {
                     processedUrls.push(item.link);
 
                     // 4. Create Social Media Caption
-                    const socialCaption = await generateSocialCaption(item, generated, settings.aiModel || 'gemini-2.5-flash');
+                    const socialCaption = await generateSocialCaption(item, generated, settings.aiModel || 'gemini-flash-latest');
                     
                     // 5. Post to Social Media
                     const postLink = process.env.CLIENT_URL ? `${process.env.CLIENT_URL}/news/${category}/${savedPost._id}` : item.link;
