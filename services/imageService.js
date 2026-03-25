@@ -61,7 +61,14 @@ const fetchImageFromUnsplash = async (keyword) => {
 const processAndUploadImage = async (imageUrl, altKeyword) => {
     try {
         // Download the image
-        const response = await axios({ url: imageUrl, responseType: 'arraybuffer' });
+        const response = await axios({ 
+            url: imageUrl, 
+            responseType: 'arraybuffer',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+            }
+        });
         const inputBuffer = Buffer.from(response.data, 'binary');
 
         // Prepare watermark
@@ -154,20 +161,32 @@ const processAndUploadImage = async (imageUrl, altKeyword) => {
 };
 
 const getNewsImage = async (keywords, fallbackUrl = null) => {
+    // 1. If we have the exact original image from the RSS, JUST RETURN IT directly!
+    // Bypassing our download process because Indian News CDNs strictly block servers with 403 Forbidden.
+    if (fallbackUrl) {
+        return {
+            newsCard: fallbackUrl,
+            social: fallbackUrl,
+            og: fallbackUrl,
+            credit: 'Original News Source'
+        };
+    }
+
+    // 2. If NO original image exists, generate a topic-based stock photo.
+    let imageUrlToProcess = null;
+    let credit = 'Pexels Default';
+    
     let source = await fetchImageFromPexels(keywords[0] || 'news');
     if (!source) source = await fetchImageFromUnsplash(keywords[0] || 'news');
     
-    // If no stock images found but we have an RSS fallback image
-    let imageUrlToProcess = source ? source.url : fallbackUrl;
-    let credit = source ? source.credit : 'RSS';
-
-    if (!imageUrlToProcess) {
-        // Ultimate fallback: random nature/news from pexels
-        imageUrlToProcess = 'https://images.pexels.com/photos/3861458/pexels-photo-3861458.jpeg'; 
-        credit = 'Pexels Default';
+    if (source) {
+        imageUrlToProcess = source.url;
+        credit = source.credit;
+    } else {
+        imageUrlToProcess = 'https://images.pexels.com/photos/3861458/pexels-photo-3861458.jpeg';
     }
 
-    const processedUrls = await processAndUploadImage(imageUrlToProcess, keywords[0]);
+    const processedUrls = await processAndUploadImage(imageUrlToProcess, keywords[0] || 'news');
     if (!processedUrls) return null;
 
     return {

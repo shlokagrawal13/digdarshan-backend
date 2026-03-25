@@ -16,6 +16,8 @@ const http = require('http');
 const socketIO = require('socket.io');
 
 connectDB();
+const { initScheduler } = require('./jobs/newsScheduler');
+initScheduler();
 
 const app = express();
 

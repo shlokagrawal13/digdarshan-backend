@@ -6,23 +6,42 @@ const scheduler = require('../jobs/newsScheduler');
 // const adminAuth = require('../middleware/adminAuth');
 // router.use(adminAuth);
 
-router.get('/settings', (req, res) => {
-    res.json(scheduler.getSettings());
+router.get('/settings', async (req, res) => {
+    try {
+        const settings = await scheduler.getSettings();
+        res.json(settings);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
-router.put('/settings', (req, res) => {
-    const updated = scheduler.updateSettings(req.body);
-    res.json(updated);
+router.put('/settings', async (req, res) => {
+    try {
+        const updated = await scheduler.updateSettings(req.body);
+        res.json(updated);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
-router.post('/start', (req, res) => {
-    scheduler.startScheduler();
-    res.json({ success: true, message: 'Scheduler started', settings: scheduler.getSettings() });
+router.post('/start', async (req, res) => {
+    try {
+        await scheduler.startScheduler();
+        const settings = await scheduler.getSettings();
+        res.json({ success: true, message: 'Scheduler started', settings });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
-router.post('/stop', (req, res) => {
-    scheduler.stopScheduler();
-    res.json({ success: true, message: 'Scheduler stopped', settings: scheduler.getSettings() });
+router.post('/stop', async (req, res) => {
+    try {
+        await scheduler.stopScheduler();
+        const settings = await scheduler.getSettings();
+        res.json({ success: true, message: 'Scheduler stopped', settings });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 router.post('/run-now', async (req, res) => {
@@ -35,8 +54,13 @@ router.post('/run-now', async (req, res) => {
     }
 });
 
-router.get('/logs', (req, res) => {
-    res.json(scheduler.getSettings().logs);
+router.get('/logs', async (req, res) => {
+    try {
+        const settings = await scheduler.getSettings();
+        res.json(settings.logs || []);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 module.exports = router;

@@ -5,7 +5,10 @@ const parser = new Parser({
         item: [
             ['media:content', 'mediaContent'],
             ['media:thumbnail', 'mediaThumbnail'],
-            ['enclosure', 'enclosure']
+            ['enclosure', 'enclosure'],
+            ['StoryImage', 'storyImage'],
+            ['image', 'image'],
+            ['content:encoded', 'contentEncoded']
         ]
     },
     headers: {
@@ -55,13 +58,20 @@ const RSS_FEEDS = {
  * Extracts the best possible image URL from an RSS item
  */
 const extractImage = (item) => {
+    if (item.storyImage) return item.storyImage;
+    if (item.image) {
+        if (typeof item.image === 'string') return item.image;
+        if (item.image.url) return item.image.url;
+    }
     if (item.enclosure && item.enclosure.url) return item.enclosure.url;
     if (item.mediaContent && item.mediaContent.$ && item.mediaContent.$.url) return item.mediaContent.$.url;
     if (item.mediaThumbnail && item.mediaThumbnail.$ && item.mediaThumbnail.$.url) return item.mediaThumbnail.$.url;
+    if (item.mediaContent && typeof item.mediaContent === 'string' && item.mediaContent.startsWith('http')) return item.mediaContent;
     
     // Check inside content/description for an img tag
-    const imgRegex = /<img[^>]+src="?([^"\s]+)"?\s*\/>/g;
-    const match = imgRegex.exec(item.content || item.contentSnippet || item.description);
+    const imgRegex = /<img[^>]+src=["']?([^"'>\s]+)["']?[^>]*>/i;
+    const contentToSearch = item.contentEncoded || item.content || item.contentSnippet || item.description || '';
+    const match = imgRegex.exec(contentToSearch);
     if (match && match[1]) return match[1];
 
     return null;

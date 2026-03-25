@@ -6,6 +6,7 @@ const { generateHindiContent, generateSocialCaption } = require('../services/gem
 const { getNewsImage } = require('../services/imageService');
 const { postToAllPlatforms } = require('../services/socialMediaService');
 const NewsModels = require('../models/News');
+const AutoPublishSettings = require('../models/AutoPublishSettings');
 
 const PROCESSED_URLS_FILE = path.join(__dirname, '../data/processed_rss.json');
 
@@ -30,26 +31,23 @@ const saveProcessedUrl = (url) => {
     } catch (e) {}
 };
 
-// In-memory settings
-let settings = {
-    isRunning: false,
-    isPublishing: false,
-    interval: '0 */6 * * *',
-    categories: ['national'],
-    newsPerBatch: 2, // Process max 2 per category
-    platforms: { telegram: false, facebook: false, instagram: false, twitter: false },
-    aiModel: 'gemini-2.5-flash', // Allow UI dynamic model selection
-    lastRun: null,
-    logs: [] // keep last 50
-};
-
 let activeCronJob = null;
 
-const addLog = (logEntry) => {
-    settings.logs.unshift(logEntry);
-    if (settings.logs.length > 50) {
-        settings.logs.pop();
+const getDbSettings = async () => {
+    let doc = await AutoPublishSettings.findOne();
+    if (!doc) {
+        doc = await AutoPublishSettings.create({});
     }
+    return doc;
+};
+
+const addLog = async (logEntry) => {
+    const doc = await getDbSettings();
+    doc.logs.unshift(logEntry);
+    if (doc.logs.length > 50) {
+        doc.logs.pop();
+    }
+    await doc.save();
 };
 
 const HINDI_CATEGORIES = {
@@ -89,13 +87,15 @@ const saveNewsToDatabase = async (generated, imageUrl, category) => {
 };
 
 const runNewsJob = async () => {
+    const settings = await getDbSettings();
     if (settings.isPublishing) {
         console.log('[AI Auto Publisher] Job already running, skipping trigger.');
         return;
     }
     settings.isPublishing = true;
-    console.log('[AI Auto Publisher] Fetching news batch for ALL selected categories...');
     settings.lastRun = new Date();
+    await settings.save();
+    console.log('[AI Auto Publisher] Fetching news batch for ALL selected categories...');
     
     let successCount = 0;
     let failCount = 0;
@@ -168,9 +168,11 @@ const runNewsJob = async () => {
          failCount++;
     }
 
-    settings.isPublishing = false;
+    const finalSettings = await getDbSettings();
+    finalSettings.isPublishing = false;
+    await finalSettings.save();
 
-    addLog({
+    await addLog({
         timestamp: new Date(),
         publishedCount: successCount,
         failedCount: failCount,
@@ -180,35 +182,65 @@ const runNewsJob = async () => {
     console.log(`[AI Auto Publisher] Batch complete. Success: ${successCount}, Failed: ${failCount}, Skipped Dupes: ${skipCount}`);
 };
 
-const stopScheduler = () => {
+const stopScheduler = async () => {
     if (activeCronJob) {
         activeCronJob.stop();
         activeCronJob = null;
     }
-    settings.isRunning = false;
+    const doc = await getDbSettings();
+    doc.isRunning = false;
+    await doc.save();
 };
 
-const startScheduler = () => {
-    stopScheduler();
-    activeCronJob = cron.schedule(settings.interval, runNewsJob);
-    settings.isRunning = true;
-    console.log(`[AI Auto Publisher] Scheduler started with interval: ${settings.interval}`);
-};
-
-const updateSettings = (newSettings) => {
-    settings = { ...settings, ...newSettings };
-    if (settings.isRunning) {
-        startScheduler(); // Restart with new interval
+const startScheduler = async (passedDoc = null) => {
+    if (activeCronJob) {
+        activeCronJob.stop();
+        activeCronJob = null;
     }
-    return settings;
+    const doc = passedDoc || await getDbSettings();
+    doc.isRunning = true;
+    await doc.save();
+    
+    activeCronJob = cron.schedule(doc.interval, runNewsJob);
+    console.log(`[AI Auto Publisher] Scheduler started with interval: ${doc.interval}`);
 };
 
-const getSettings = () => settings;
+const updateSettings = async (newSettings) => {
+    const doc = await getDbSettings();
+    Object.assign(doc, newSettings);
+    await doc.save();
+    if (doc.isRunning) {
+        await startScheduler(doc);
+    }
+    return doc.toObject();
+};
+
+const getSettings = async () => {
+    const doc = await getDbSettings();
+    return doc.toObject();
+};
+
+const initScheduler = async () => {
+    try {
+        const doc = await getDbSettings();
+        if (doc.isPublishing) {
+            doc.isPublishing = false;
+            await doc.save();
+        }
+        if (doc.isRunning) {
+            console.log(`[AI Auto Publisher] Resuming saved cron job from MongoDB...`);
+            await startScheduler(doc);
+        }
+    } catch (err) {
+        console.error('[AI Auto Publisher] Init error:', err);
+    }
+};
 
 module.exports = {
     runNewsJob,
     startScheduler,
     stopScheduler,
     updateSettings,
-    getSettings
+    getSettings,
+    initScheduler
 };
