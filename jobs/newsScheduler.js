@@ -32,6 +32,7 @@ const saveProcessedUrl = (url) => {
 };
 
 let activeCronJob = null;
+let missedSchedulePoller = null;
 
 const getDbSettings = async () => {
     let doc = await AutoPublishSettings.findOne();
@@ -186,10 +187,60 @@ const runNewsJob = async () => {
     console.log(`[AI Auto Publisher] Batch complete. Success: ${successCount}, Failed: ${failCount}, Skipped Dupes: ${skipCount}`);
 };
 
+const getPastScheduledTime = (cronExpression) => {
+    const now = new Date();
+    
+    if (cronExpression === '* * * * *') {
+        const d = new Date(now);
+        d.setSeconds(0, 0); // e.g. 15:30:00
+        return d;
+    } else if (cronExpression === '0 * * * *') {
+        const d = new Date(now);
+        d.setMinutes(0, 0, 0);
+        return d;
+    } else if (cronExpression === '0 0 * * *') {
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        return d;
+    } else {
+        const match = cronExpression?.match(/0 \*\/(\d+) \* \* \*/);
+        if (match) {
+            const step = parseInt(match[1], 10);
+            const currentHour = now.getHours();
+            const lastCronHour = currentHour - (currentHour % step);
+            const d = new Date(now);
+            d.setHours(lastCronHour, 0, 0, 0);
+            return d;
+        }
+    }
+    return new Date(0);
+};
+
+const checkMissedSchedule = async () => {
+    try {
+        const settings = await getDbSettings();
+        if (!settings.isRunning || settings.isPublishing) return;
+        
+        const lastRun = settings.lastRun ? new Date(settings.lastRun) : new Date(0);
+        const expectedPastRun = getPastScheduledTime(settings.interval);
+
+        if (expectedPastRun > lastRun) {
+            console.log(`[AI Auto Publisher] Catch-up triggered! Missed schedule detected. Expected: ${expectedPastRun.toLocaleString()}, Last Run: ${lastRun.toLocaleString()}`);
+            runNewsJob(); // run immediately
+        }
+    } catch (e) {
+        console.error('[AI Auto Publisher] Poller error:', e);
+    }
+};
+
 const stopScheduler = async () => {
     if (activeCronJob) {
         activeCronJob.stop();
         activeCronJob = null;
+    }
+    if (missedSchedulePoller) {
+        clearInterval(missedSchedulePoller);
+        missedSchedulePoller = null;
     }
     const doc = await getDbSettings();
     doc.isRunning = false;
@@ -201,11 +252,21 @@ const startScheduler = async (passedDoc = null) => {
         activeCronJob.stop();
         activeCronJob = null;
     }
+    if (missedSchedulePoller) {
+        clearInterval(missedSchedulePoller);
+        missedSchedulePoller = null;
+    }
     const doc = passedDoc || await getDbSettings();
     doc.isRunning = true;
     await doc.save();
     
     activeCronJob = cron.schedule(doc.interval, runNewsJob);
+    
+    // Check every minute for sleep / missed schedules
+    missedSchedulePoller = setInterval(checkMissedSchedule, 60 * 1000);
+    // Also do one immediate check on start
+    setTimeout(checkMissedSchedule, 5000); 
+
     console.log(`[AI Auto Publisher] Scheduler started with interval: ${doc.interval}`);
 };
 
